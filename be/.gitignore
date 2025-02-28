@@ -1,0 +1,71 @@
+# Compiled source #
+###################
+*.class
+*.dll
+*.exe
+*.o
+*.so
+
+# Packages #
+############
+*.jar
+*.war
+*.ear
+
+# Logs and databases #
+######################
+*.log
+*.sql
+*.sqlite
+
+# OS generated files #
+######################
+.DS_Store
+Thumbs.db
+
+# IDE specific files #
+######################
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Node.js #
+###########
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Python #
+##########
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+venv/
+env/
+ENV/
+.venv/
+.pytest_cache/
+.env
+
+# Java #
+########
+*.class
+*.jar
+*.war
+*.ear
+*.zip
+*.tar.gz
+*.rar
+*.log
+*.jmx
+*.jtl
+*.class
+*.project
+*.classpath
+*.settings/
+*.factorypath
+target/
+build/
+out/
