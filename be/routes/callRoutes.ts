@@ -100,14 +100,40 @@ router.post('/collect-order', async (req: Request, res: Response) => {
                         speechTimeout: 'auto'
                     });
                 }
+                // Gestisci il caso in cui l'utente ha specificato solo l'orario
+                else if (orderItems.length === 1 && orderItems[0].special === 'time_only') {
+                    const pickupTime = orderItems[0].pickupTime;
+                    const timeStr = getTimeFromSlot(pickupTime);
+                    
+                    response.say({
+                        voice: 'Polly.Bianca',
+                        language: 'it-IT'
+                    }, `Ho capito che vuoi ritirare alle ${timeStr}. Cosa vorresti ordinare?`);
+
+                    response.gather({
+                        input: 'speech' as any,
+                        action: `/api/calls/collect-order?storeId=${storeId}&pickupTime=${pickupTime}`,
+                        language: 'it-IT',
+                        speechTimeout: 'auto'
+                    });
+                }
                 else if (orderItems && orderItems.length > 0) {
+                    // Correggi quantità eccessive (per esempio, 7 pizze quando intendeva "alle 7")
+                    const correctedItems = orderItems.map((item: { quantity: number; name: string; }) => {
+                        if (item.quantity > 5 && 
+                            !speechResult.toLowerCase().includes(`${item.quantity} ${item.name.toLowerCase()}`)) {
+                            return { ...item, quantity: 1 };
+                        }
+                        return item;
+                    });
+
                     // Crea una descrizione leggibile dell'ordine
-                    const orderDescription = orderItems
+                    const orderDescription = correctedItems
                         .map((item: { quantity: any; name: any; }) => `${item.quantity} ${item.name || 'item'}`)
                         .join(', ');
 
                     // Salva l'ordine base nella query per utilizzarlo nella fase successiva
-                    const baseOrderQuery = encodeURIComponent(JSON.stringify(orderItems));
+                    const baseOrderQuery = encodeURIComponent(JSON.stringify(correctedItems));
 
                     response.say({
                         voice: 'Polly.Bianca',
@@ -177,7 +203,7 @@ router.post('/collect-order', async (req: Request, res: Response) => {
     }
 });
 
-// Nuovo endpoint per chiedere se vuole bevande
+// Endpoint per chiedere se vuole bevande
 router.post('/add-drinks', (req: Request, res: Response) => {
     try {
         console.log('Add drinks - Speech Result:', req.body.SpeechResult);
@@ -185,6 +211,15 @@ router.post('/add-drinks', (req: Request, res: Response) => {
         const speechResult = req.body.SpeechResult || '';
         const storeId = req.query.storeId?.toString() || '1234';
         const baseOrder = req.query.baseOrder ? JSON.parse(decodeURIComponent(req.query.baseOrder.toString())) : [];
+        
+        // Controlla se è presente un orario nell'ordine base
+        let pickupTime = null;
+        for (const item of baseOrder) {
+            if (item.pickupTime) {
+                pickupTime = item.pickupTime;
+                break;
+            }
+        }
 
         let updatedOrder = [...baseOrder];
         const wantsDrinks = speechResult.toLowerCase().includes('sì') ||
@@ -236,13 +271,13 @@ router.post('/add-drinks', (req: Request, res: Response) => {
         }, 'Mi scuso per l\'inconveniente. Procediamo con il tuo ordine base.');
 
         // Redirect to confirm-order in caso di errore
-        response.redirect(`/api/calls/final-questions?storeId=${req.query.storeId || '1234'}`);
+        response.redirect(`/api/calls/final-confirm?storeId=${req.query.storeId || '1234'}`);
         res.set('Content-Type', 'text/xml');
         res.send(response.toString());
     }
 });
 
-// Nuovo endpoint per chiedere se vuole dessert
+// Endpoint per chiedere se vuole dessert
 router.post('/add-dessert', (req: Request, res: Response) => {
     try {
         console.log('Add dessert - Speech Result:', req.body.SpeechResult);
@@ -250,6 +285,15 @@ router.post('/add-dessert', (req: Request, res: Response) => {
         const speechResult = req.body.SpeechResult || '';
         const storeId = req.query.storeId?.toString() || '1234';
         const updatedOrder = req.query.updatedOrder ? JSON.parse(decodeURIComponent(req.query.updatedOrder.toString())) : [];
+        
+        // Controlla se è presente un orario nell'ordine
+        let pickupTime = null;
+        for (const item of updatedOrder) {
+            if (item.pickupTime) {
+                pickupTime = item.pickupTime;
+                break;
+            }
+        }
 
         const wantsDessert = speechResult.toLowerCase().includes('sì') ||
             speechResult.toLowerCase().includes('si') ||
@@ -305,107 +349,6 @@ router.post('/final-confirm', (req: Request, res: Response) => {
         const speechResult = req.body.SpeechResult || '';
         const storeId = req.query.storeId?.toString() || '1234';
         const finalOrder = req.query.finalOrder ? JSON.parse(decodeURIComponent(req.query.finalOrder.toString())) : [];
-
-        // Aggiungi preferenza taglio pizza
-        const wantsCut = speechResult.toLowerCase().includes('sì') ||
-            speechResult.toLowerCase().includes('si') ||
-            speechResult.toLowerCase().includes('certo') ||
-            speechResult.toLowerCase().includes('ok');
-
-        // Prepara un riassunto dell'ordine
-        const orderDescription = finalOrder
-            .map((item: { quantity: any; name: any; }) => `${item.quantity} ${item.name || 'item'}`)
-            .join(', ');
-
-        const cuttingPreference = wantsCut ? 'tagliate a spicchi' : 'non tagliate';
-
-        // Chiedi conferma finale in modo conversazionale
-        response.say({
-            voice: 'Polly.Bianca',
-            language: 'it-IT'
-        }, `Perfetto! Riassumo il tuo ordine: ${orderDescription}, con le pizze ${cuttingPreference}. Ti sembra tutto corretto o vuoi modificare qualcosa?`);
-
-        response.gather({
-            input: 'speech' as any,
-            action: `/api/calls/complete-order?storeId=${storeId}&cutting=${wantsCut}`,
-            language: 'it-IT',
-            speechTimeout: 'auto'
-        });
-
-        console.log('TwiML generato per final-confirm:', response.toString());
-        res.set('Content-Type', 'text/xml');
-        res.send(response.toString());
-    } catch (error) {
-        console.error('Errore in final-confirm:', error);
-        const response = new VoiceResponse();
-        response.say({
-            voice: 'Polly.Bianca',
-            language: 'it-IT'
-        }, 'Mi dispiace per il problema. Considero il tuo ordine come confermato. Grazie!');
-
-        // Termina in caso di errore
-        response.hangup();
-        res.set('Content-Type', 'text/xml');
-        res.send(response.toString());
-    }
-});
-
-// Endpoint finale per completare l'ordine
-router.post('/complete-order', (req: Request, res: Response) => {
-    try {
-        console.log('Complete order - Speech Result:', req.body.SpeechResult);
-        const response = new VoiceResponse();
-        const speechResult = req.body.SpeechResult || '';
-
-        const isConfirmed = speechResult.toLowerCase().includes('sì') ||
-            speechResult.toLowerCase().includes('si') ||
-            speechResult.toLowerCase().includes('certo') ||
-            speechResult.toLowerCase().includes('ok') ||
-            speechResult.toLowerCase().includes('perfetto') ||
-            speechResult.toLowerCase().includes('corretto') ||
-            !speechResult.toLowerCase().includes('no') &&
-            !speechResult.toLowerCase().includes('modific');
-
-        if (isConfirmed) {
-            // Qui potresti salvare l'ordine nel database
-            response.say({
-                voice: 'Polly.Bianca',
-                language: 'it-IT'
-            }, 'Fantastico! Il tuo ordine è stato registrato e sarà pronto tra circa 25 minuti. Puoi passare a ritirarlo o se preferisci consegnare a domicilio è possibile concordare un orario. Grazie per averci scelto e buon appetito!');
-        } else {
-            response.say({
-                voice: 'Polly.Bianca',
-                language: 'it-IT'
-            }, 'Nessun problema! Puoi richiamare quando vuoi per fare un nuovo ordine. Grazie per la tua pazienza e a presto!');
-        }
-
-        // Chiudi la chiamata
-        response.hangup();
-
-        console.log('TwiML generato per complete-order:', response.toString());
-        res.set('Content-Type', 'text/xml');
-        res.send(response.toString());
-    } catch (error) {
-        console.error('Errore in complete-order:', error);
-        const response = new VoiceResponse();
-        response.say({
-            voice: 'Polly.Bianca',
-            language: 'it-IT'
-        }, 'Mi dispiace per l\'inconveniente. Il tuo ordine è stato comunque registrato. Grazie e arrivederci!');
-        response.hangup();
-        res.set('Content-Type', 'text/xml');
-        res.send(response.toString());
-    }
-});
-
-
-router.post('/final-confirm', (req: Request, res: Response) => {
-    try {
-        console.log('Final confirm - Speech Result:', req.body.SpeechResult);
-        const response = new VoiceResponse();
-        const speechResult = req.body.SpeechResult || '';
-        const storeId = req.query.storeId?.toString() || '1234';
-        const finalOrder = req.query.finalOrder ? JSON.parse(decodeURIComponent(req.query.finalOrder.toString())) : [];
         const callerPhone = req.body.Caller || '';
 
         // Aggiungi preferenza taglio pizza
@@ -420,28 +363,54 @@ router.post('/final-confirm', (req: Request, res: Response) => {
             .join(', ');
 
         const cuttingPreference = wantsCut ? 'tagliate a spicchi' : 'non tagliate';
-
+        
+        // Controlla se l'orario è già stato specificato in qualsiasi elemento dell'ordine
+        let pickupTime = null;
+        for (const item of finalOrder) {
+            if (item.pickupTime) {
+                pickupTime = item.pickupTime;
+                break;
+            }
+        }
+        
         // Passa i dati dell'ordine completo
         const orderDataQuery = encodeURIComponent(JSON.stringify({
             items: finalOrder,
             cutting: wantsCut,
             notes: wantsCut ? 'Pizze tagliate a spicchi' : 'Pizze non tagliate',
             phone: callerPhone,
-            storeId: storeId
+            storeId: storeId,
+            slot: pickupTime
         }));
 
-        // Chiedi l'orario di ritiro
-        response.say({
-            voice: 'Polly.Bianca',
-            language: 'it-IT'
-        }, `Perfetto! Riassumo il tuo ordine: ${orderDescription}, con le pizze ${cuttingPreference}. A che ora vorresti ritirare il tuo ordine? Il tempo di preparazione è di circa 20 minuti.`);
+        // Se l'orario è già stato specificato, vai direttamente alla conferma finale
+        if (pickupTime) {
+            const timeStr = getTimeFromSlot(pickupTime);
+            response.say({
+                voice: 'Polly.Bianca',
+                language: 'it-IT'
+            }, `Perfetto! Riassumo il tuo ordine: ${orderDescription}, con le pizze ${cuttingPreference}, pronte per il ritiro alle ${timeStr}. Ti sembra tutto corretto?`);
 
-        response.gather({
-            input: 'speech' as any,
-            action: `/api/calls/select-time?orderData=${orderDataQuery}`,
-            language: 'it-IT',
-            speechTimeout: 'auto'
-        });
+            response.gather({
+                input: 'speech' as any,
+                action: `/api/calls/confirm-time?orderData=${orderDataQuery}&slot=${pickupTime}`,
+                language: 'it-IT',
+                speechTimeout: 'auto'
+            });
+        } else {
+            // Altrimenti chiedi l'orario
+            response.say({
+                voice: 'Polly.Bianca',
+                language: 'it-IT'
+            }, `Perfetto! Riassumo il tuo ordine: ${orderDescription}, con le pizze ${cuttingPreference}. A che ora vorresti ritirare il tuo ordine? Il tempo di preparazione è di circa 20 minuti.`);
+
+            response.gather({
+                input: 'speech' as any,
+                action: `/api/calls/select-time?orderData=${orderDataQuery}`,
+                language: 'it-IT',
+                speechTimeout: 'auto'
+            });
+        }
 
         console.log('TwiML generato per final-confirm:', response.toString());
         res.set('Content-Type', 'text/xml');
@@ -460,9 +429,7 @@ router.post('/final-confirm', (req: Request, res: Response) => {
     }
 });
 
-// Aggiungi questi NUOVI endpoint alla fine del tuo file callRoutes.ts esistente:
-
-// Nuovo endpoint per selezionare l'orario di ritiro
+// Endpoint per selezionare l'orario di ritiro
 router.post('/select-time', (req: Request, res: Response) => {
     try {
         console.log('Select time - Speech Result:', req.body.SpeechResult);
@@ -577,6 +544,7 @@ router.post('/confirm-time', async (req: Request, res: Response) => {
                     totalPrice: 0, // Questo andrebbe calcolato correttamente
                     status: OrderStatus.PENDING,
                     slot: slot,
+                    orderTime: new Date(),
                     customerInfo: {
                         name: 'Cliente telefonico',
                         phone: orderData.phone || 'Anonimo'
@@ -625,7 +593,7 @@ router.post('/confirm-time', async (req: Request, res: Response) => {
     }
 });
 
-// Aggiungi queste funzioni di utilità alla fine del file
+// Funzioni di utilità per gestire gli slot orari
 function getCurrentTimeSlot(): number {
     const now = new Date();
     const minutes = now.getHours() * 60 + now.getMinutes();
@@ -640,23 +608,27 @@ function getTimeFromSlot(slot: number): string {
 }
 
 function calculateSlot(speechText: string): number {
-    // Cerca pattern come "13:45", "13 e 45", "alle 2", ecc.
-    const timeRegex = /(\d{1,2})[:\s][eE]?\s*(\d{1,2})?/;
-    const match = speechText.match(timeRegex);
-
+    // Pattern migliorato per riconoscere orari come "per le 7:15", "alle 19:30", "7 e 15", ecc.
+    const timePattern = /per\s+le\s+(\d{1,2})(?::(\d{1,2}))?|\s+alle\s+(\d{1,2})(?::(\d{1,2}))?|\s+(\d{1,2})[:\s][eE]?\s*(\d{1,2})?\s/i;
+    const match = speechText.match(timePattern);
+    
     if (match) {
-        let hours = parseInt(match[1]);
-        // Se l'ora è tra 1 e 11, probabilmente è PM se siamo nel pomeriggio/sera
+        // Prendiamo il primo gruppo non undefined tra quelli che contengono ore
+        let hours = parseInt(match[1] || match[3] || match[5]);
+        // Prendiamo il primo gruppo non undefined tra quelli che contengono minuti
+        let minutes = parseInt(match[2] || match[4] || match[6] || '0');
+        
+        // Aggiusta l'orario per AM/PM - se l'ora è tra 1 e 11 di sera, è probabilmente PM
         if (hours >= 1 && hours <= 11) {
             const now = new Date();
             if (now.getHours() >= 12) {
                 hours += 12;
             }
         }
-        const minutes = match[2] ? parseInt(match[2]) : 0;
+        
         return Math.floor((hours * 60 + minutes) / 15);
     }
-
+    
     // Se non troviamo un orario specifico, restituisci uno slot dopo 30 minuti
     return getCurrentTimeSlot() + 2;
 }
